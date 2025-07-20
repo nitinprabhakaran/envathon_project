@@ -5,3 +5,4 @@
 /gitlab-runner/*
 /setup_scripts/*
 .env*
+Prompt_internal reference.txt

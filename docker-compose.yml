@@ -1,6 +1,10 @@
 networks:
   devops-network:
     driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "true"
+      com.docker.network.bridge.enable_ip_masquerade: "true"
+      com.docker.network.driver.mtu: "1500"
 
 volumes:
   gitlab_config:
@@ -16,8 +20,6 @@ volumes:
   pip_cache:
   deployments:
   builds:
-  mongodb_data:
-  mongodb_config:
 
 services:
   postgres-gitlab:
@@ -190,14 +192,12 @@ services:
     restart: unless-stopped
 
   # GitLab MCP Server
-  gitlab-mcp:
-    build: ./mcp-servers/gitlab-mcp
-    container_name: gitlab-mcp
+  gitlab-api:
+    build: ./services/gitlab-api
+    container_name: gitlab-api
     environment:
       GITLAB_URL: http://gitlab:80
       GITLAB_TOKEN: ${GITLAB_TOKEN}
-      MCP_MODE: http
-      PORT: 8000
     networks:
       - devops-network
     depends_on:
@@ -205,7 +205,7 @@ services:
         condition: service_started
     restart: unless-stopped
     ports:
-      - "8081:8000"
+      - "8081:8081"
   
   redis:
     image: redis:7-alpine
@@ -221,36 +221,14 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
-  
-  mongodb:
-    image: mongo:5
-    container_name: mongodb
-    ports:
-      - "27017:27017"
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: mongodb123
-    volumes:
-      - mongodb_data:/data/db
-      - mongodb_config:/data/configdb
-    networks:
-      - devops-network
-    restart: unless-stopped
-    healthcheck:
-      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   # SonarQube MCP Server
-  sonarqube-mcp:
-    build: ./mcp-servers/sonarqube-mcp
-    container_name: sonarqube-mcp
+  sonarqube-api:
+    build: ./services/sonarqube-api
+    container_name: sonarqube-api
     environment:
-      SONARQUBE_URL: http://sonarqube:9000  # Internal port remains 9000
+      SONARQUBE_URL: http://sonarqube:9000
       SONARQUBE_TOKEN: ${SONARQUBE_TOKEN}
-      MCP_MODE: http
-      PORT: 8000
     networks:
       - devops-network
     depends_on:
@@ -258,7 +236,7 @@ services:
         condition: service_started
     restart: unless-stopped
     ports:
-      - "8082:8000"
+      - "8082:8082"
 
   # Webhook Handler
   webhook-handler:
@@ -267,7 +245,7 @@ services:
     environment:
       STREAMLIT_URL: http://streamlit-ui:8501
       GITLAB_URL: http://gitlab:80
-      SONARQUBE_URL: http://sonarqube:9000  # Internal communication uses 9000
+      SONARQUBE_URL: http://sonarqube:9000
     ports:
       - "8083:5000"
     networks:
@@ -287,8 +265,8 @@ services:
       - "8501:8501"
     environment:
       # MCP URLs
-      GITLAB_MCP_URL: http://gitlab-mcp:8000
-      SONARQUBE_MCP_URL: http://sonarqube-mcp:8000
+      GITLAB_API_URL: http://gitlab-api:8081
+      SONARQUBE_API_URL: http://sonarqube-api:8082
       
       # LLM Provider Configuration
       LLM_PROVIDER: ${LLM_PROVIDER}
@@ -296,18 +274,6 @@ services:
       # Claude/Anthropic
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       CLAUDE_MODEL: ${CLAUDE_MODEL}
-      
-      # OpenAI
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_MODEL: ${OPENAI_MODEL}
-      
-      # Google Gemini
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-      GEMINI_MODEL: ${GEMINI_MODEL}
-      
-      # Ollama
-      OLLAMA_MODEL: ${OLLAMA_MODEL}
-      OLLAMA_HOST: ${OLLAMA_HOST}
       
       # Service URLs
       GITLAB_URL: http://gitlab:80
@@ -331,29 +297,11 @@ services:
     networks:
       - devops-network
     depends_on:
-      gitlab-mcp:
+      gitlab-api:
         condition: service_started
-      sonarqube-mcp:
+      sonarqube-api:
         condition: service_started
     restart: unless-stopped
-
-  # Optional: Ollama for local LLM support
-  # Uncomment if you want to use local LLMs
-  # ollama:
-  #   image: ollama/ollama:latest
-  #   container_name: ollama
-  #   ports:
-  #     - "11434:11434"
-  #   volumes:
-  #     - ./ollama:/root/.ollama
-  #   networks:
-  #     - devops-network
-  #   restart: unless-stopped
-  #   # Uncomment below if you have GPU support
-  #   # deploy:
-  #   #   resources:
-  #   #     reservations:
-  #   #       devices:
-  #   #         - driver: nvidia
-  #   #           count: 1
-  #   #           capabilities: [gpu]
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
