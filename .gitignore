@@ -1,0 +1,7 @@
+/builds/*
+/data/*
+/gitlab-repos/*
+/envathon_venv/*
+/gitlab-runner/*
+/setup_scripts/*
+.env*

@@ -1,0 +1,10 @@
+docker exec -it gitlab-runner gitlab-runner register \
+  --non-interactive \
+  --url "http://localhost:8080/" \
+  --registration-token "vh6EYDdK7CxDx_a_8Q7N" \
+  --executor "docker" \
+  --docker-image "alpine:latest" \
+  --description "simple-docker-runner" \
+  --tag-list "docker,local" \
+  --run-untagged="true" \
+  --locked="false"

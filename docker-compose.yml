@@ -1,0 +1,359 @@
+networks:
+  devops-network:
+    driver: bridge
+
+volumes:
+  gitlab_config:
+  redis_data:
+  gitlab_logs:
+  gitlab_data:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:
+  postgres_data:
+  postgres_sonar_data:
+  maven_cache:
+  pip_cache:
+  deployments:
+  builds:
+  mongodb_data:
+  mongodb_config:
+
+services:
+  postgres-gitlab:
+    image: postgres:16-alpine
+    container_name: postgres-gitlab
+    environment:
+      POSTGRES_USER: gitlab
+      POSTGRES_PASSWORD: gitlab123
+      POSTGRES_DB: gitlabhq_production
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gitlab"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - devops-network
+    restart: unless-stopped
+
+  postgres-sonar:
+    image: postgres:16-alpine
+    container_name: postgres-sonar
+    environment:
+      POSTGRES_USER: sonar
+      POSTGRES_PASSWORD: sonar123
+      POSTGRES_DB: sonarqube
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sonarqube"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - postgres_sonar_data:/var/lib/postgresql/data
+    networks:
+      - devops-network
+    restart: unless-stopped
+
+  # GitLab with your working configuration
+  gitlab:
+    image: yrzr/gitlab-ce-arm64v8:18.0.4-ce.0
+    container_name: gitlab
+    restart: always
+    hostname: 'localhost'
+    ports:
+      - "8080:80"
+      - "2222:22"
+    volumes:
+      - gitlab_config:/etc/gitlab
+      - gitlab_logs:/var/log/gitlab
+      - gitlab_data:/var/opt/gitlab
+      - deployments:/deployments
+      - builds:/builds
+      - maven_cache:/maven_cache
+      - pip_cache:/pip_cache
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://localhost:8080'
+        nginx['listen_port'] = 80
+        gitlab_rails['gitlab_shell_ssh_port'] = 2222
+        gitlab_rails['initial_root_password'] = 'Nitin3011'
+        
+        # Disable container registry to avoid certificate issues
+        registry['enable'] = false
+        gitlab_rails['registry_enabled'] = false
+        
+        # CI/CD settings
+        gitlab_ci['gitlab_ci_all_broken_builds'] = false
+        gitlab_ci['gitlab_ci_disable_validates_dependencies'] = true
+        
+        # External PostgreSQL configuration
+        gitlab_rails['db_adapter'] = 'postgresql'
+        gitlab_rails['db_host'] = 'postgres-gitlab'
+        gitlab_rails['db_port'] = 5432
+        gitlab_rails['db_username'] = 'gitlab'
+        gitlab_rails['db_password'] = 'gitlab123'
+        gitlab_rails['db_database'] = 'gitlabhq_production'
+        postgresql['enable'] = false
+        gitlab_rails['auto_migrate'] = true
+        
+        # Performance optimizations
+        puma['worker_processes'] = 2
+        sidekiq['max_concurrency'] = 5
+        postgresql['shared_buffers'] = "256MB"
+        
+        # Disable unnecessary features
+        prometheus_monitoring['enable'] = false
+        alertmanager['enable'] = false
+        registry['enable'] = false
+        gitlab_pages['enable'] = false
+        gitlab_kas['enable'] = false
+        mattermost['enable'] = false
+        # Redis configuration (add this if not present)
+        redis['enable'] = false  # Use external Redis
+        gitlab_rails['redis_host'] = 'redis'
+        gitlab_rails['redis_port'] = 6379
+
+        gitlab_rails['gitlab_default_projects_features_issues'] = false
+        gitlab_rails['gitlab_default_projects_features_wiki'] = false
+        gitlab_rails['gitlab_default_projects_features_snippets'] = false
+        gitlab_rails['operations_enabled'] = false
+        gitlab_rails['incoming_email_enabled'] = false
+        gitlab_rails['dependency_proxy_enabled'] = false
+        gitlab_rails['code_suggestions_enabled'] = false
+        gitlab_rails['gitlab_service_desk_enabled'] = false
+        
+        # CI/CD variables
+        gitlab_rails['env'] = {
+          'TEST_DB_USER' => 'test',
+          'TEST_DB_PASS' => 'test123'
+        }
+    depends_on:
+      postgres-gitlab:
+        condition: service_started
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "/opt/gitlab/bin/gitlab-healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+    networks:
+      - devops-network
+
+  # GitLab Runner for local pipeline execution
+  # gitlab-runner:
+  #   image: gitlab/gitlab-runner:latest
+  #   container_name: gitlab-runner
+  #   restart: always
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #     - ./gitlab-runner/config:/etc/gitlab-runner
+  #   networks:
+  #     - devops-network
+  #   depends_on:
+  #     gitlab:
+  #       condition: service_started
+  
+  # SonarQube - Using port 9001 to avoid conflict with ZScaler
+  sonarqube:
+    image: sonarqube:9.9-community
+    platform: linux/amd64
+    container_name: sonarqube
+    ports:
+      - "9001:9000"  # External:Internal - Access via localhost:9001
+    environment:
+      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+      SONAR_JDBC_URL: jdbc:postgresql://postgres-sonar:5432/sonarqube
+      SONAR_JDBC_USERNAME: sonar
+      SONAR_JDBC_PASSWORD: sonar123
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+    depends_on:
+      postgres-sonar:
+        condition: service_started
+    networks:
+      - devops-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/api/system/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    restart: unless-stopped
+
+  # GitLab MCP Server
+  gitlab-mcp:
+    build: ./mcp-servers/gitlab-mcp
+    container_name: gitlab-mcp
+    environment:
+      GITLAB_URL: http://gitlab:80
+      GITLAB_TOKEN: ${GITLAB_TOKEN}
+      MCP_MODE: http
+      PORT: 8000
+    networks:
+      - devops-network
+    depends_on:
+      gitlab:
+        condition: service_started
+    restart: unless-stopped
+    ports:
+      - "8081:8000"
+  
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - devops-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+  
+  mongodb:
+    image: mongo:5
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: mongodb123
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    networks:
+      - devops-network
+    restart: unless-stopped
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # SonarQube MCP Server
+  sonarqube-mcp:
+    build: ./mcp-servers/sonarqube-mcp
+    container_name: sonarqube-mcp
+    environment:
+      SONARQUBE_URL: http://sonarqube:9000  # Internal port remains 9000
+      SONARQUBE_TOKEN: ${SONARQUBE_TOKEN}
+      MCP_MODE: http
+      PORT: 8000
+    networks:
+      - devops-network
+    depends_on:
+      sonarqube:
+        condition: service_started
+    restart: unless-stopped
+    ports:
+      - "8082:8000"
+
+  # Webhook Handler
+  webhook-handler:
+    build: ./webhook-handler
+    container_name: webhook-handler
+    environment:
+      STREAMLIT_URL: http://streamlit-ui:8501
+      GITLAB_URL: http://gitlab:80
+      SONARQUBE_URL: http://sonarqube:9000  # Internal communication uses 9000
+    ports:
+      - "8083:5000"
+    networks:
+      - devops-network
+    depends_on:
+      gitlab:
+        condition: service_started
+      sonarqube:
+        condition: service_started
+    restart: unless-stopped
+
+  # Streamlit UI with all LLM provider support
+  streamlit-ui:
+    build: ./streamlit-ui
+    container_name: streamlit-ui
+    ports:
+      - "8501:8501"
+    environment:
+      # MCP URLs
+      GITLAB_MCP_URL: http://gitlab-mcp:8000
+      SONARQUBE_MCP_URL: http://sonarqube-mcp:8000
+      
+      # LLM Provider Configuration
+      LLM_PROVIDER: ${LLM_PROVIDER}
+      
+      # Claude/Anthropic
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      CLAUDE_MODEL: ${CLAUDE_MODEL}
+      
+      # OpenAI
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL}
+      
+      # Google Gemini
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL}
+      
+      # Ollama
+      OLLAMA_MODEL: ${OLLAMA_MODEL}
+      OLLAMA_HOST: ${OLLAMA_HOST}
+      
+      # Service URLs
+      GITLAB_URL: http://gitlab:80
+      SONARQUBE_URL: http://sonarqube:9000  # Internal communication
+      
+      # Confidence Thresholds
+      MIN_CONFIDENCE_THRESHOLD: ${MIN_CONFIDENCE_THRESHOLD}
+      ESCALATION_THRESHOLD: ${ESCALATION_THRESHOLD}
+      
+      # Cache Settings
+      ENABLE_CACHE: ${ENABLE_CACHE}
+      CACHE_TTL_HOURS: ${CACHE_TTL_HOURS}
+
+      LOG_LEVEL: "DEBUG"
+      PYTHONUNBUFFERED: "1"
+      
+    volumes:
+      - ./data/sessions:/app/sessions
+      - ./data/snooze:/app/snooze
+      - ./data/cache:/app/cache
+    networks:
+      - devops-network
+    depends_on:
+      gitlab-mcp:
+        condition: service_started
+      sonarqube-mcp:
+        condition: service_started
+    restart: unless-stopped
+
+  # Optional: Ollama for local LLM support
+  # Uncomment if you want to use local LLMs
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: ollama
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ./ollama:/root/.ollama
+  #   networks:
+  #     - devops-network
+  #   restart: unless-stopped
+  #   # Uncomment below if you have GPU support
+  #   # deploy:
+  #   #   resources:
+  #   #     reservations:
+  #   #       devices:
+  #   #         - driver: nvidia
+  #   #           count: 1
+  #   #           capabilities: [gpu]
