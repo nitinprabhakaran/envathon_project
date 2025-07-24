@@ -1,4 +1,4 @@
-# streamlit-ui/utils/llm_providers.py - COMPLETE REWRITTEN FILE
+# streamlit-ui/utils/llm_providers.py - WORKING CLAUDE VERSION
 import os
 import json
 import logging
@@ -232,7 +232,7 @@ class MockProvider(BaseLLMProvider):
 
 
 class ClaudeProvider(BaseLLMProvider):
-    """Claude (Anthropic) provider - FIXED VERSION"""
+    """Claude (Anthropic) provider - WORKING VERSION"""
     
     def __init__(self):
         super().__init__()
@@ -243,40 +243,19 @@ class ClaudeProvider(BaseLLMProvider):
             if not api_key:
                 raise ValueError("ANTHROPIC_API_KEY not found in environment variables")
             
-            # Initialize Claude client with proper headers
-            self.client = anthropic.Anthropic(
-                api_key=api_key,
-                default_headers={
-                    "anthropic-version": "2023-06-01"
-                }
-            )
+            # Initialize Claude client
+            self.client = anthropic.Anthropic(api_key=api_key)
             self.model = os.environ.get("CLAUDE_MODEL", "claude-3-5-sonnet-20241022")
             
             logger.info(f"✅ Initialized Claude provider")
             logger.info(f"🔑 Model: {self.model}")
             logger.info(f"🔑 API Key: {api_key[:15]}...")
             
-            # Test the connection
-            self._test_connection()
-            
         except ImportError:
             raise ImportError("anthropic package not installed. Run: pip install anthropic")
         except Exception as e:
             logger.error(f"❌ Failed to initialize Claude provider: {e}")
             raise
-    
-    def _test_connection(self):
-        """Test the connection with a simple request"""
-        try:
-            logger.info("🧪 Testing Claude API connection...")
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=5,
-                messages=[{"role": "user", "content": "Hi"}]
-            )
-            logger.info("✅ Claude API connection successful!")
-        except Exception as e:
-            logger.warning(f"⚠️ Claude API test failed: {e}")
     
     async def analyze_pipeline_failure(self, failure_data: Dict) -> Dict:
         """Progressive analysis with ALL confidence scoring from Claude"""
@@ -337,42 +316,19 @@ Failure Data:
 
 Analyze this failure and provide your response in the exact JSON format specified."""
 
-            # Call Claude with retry logic
+            # Call Claude
             logger.info("🤖 Calling Claude API...")
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    response = self.client.messages.create(
-                        model=self.model,
-                        max_tokens=4000,
-                        temperature=0.1,
-                        messages=[
-                            {"role": "user", "content": prompt}
-                        ]
-                    )
-                    logger.info(f"✅ Claude API call successful on attempt {attempt + 1}")
-                    break
-                    
-                except Exception as e:
-                    logger.warning(f"⚠️ Claude API attempt {attempt + 1} failed: {e}")
-                    if attempt == max_retries - 1:
-                        return {
-                            "error": f"Claude API unavailable: {str(e)}",
-                            "root_cause": "Pipeline failure detected - Claude API service unavailable",
-                            "confidence": 30,
-                            "fixes": [{
-                                "file_path": "unknown",
-                                "description": "Manual investigation required",
-                                "code_snippet": "# Check pipeline logs for specific error details\n# Common issues: syntax errors, missing dependencies, configuration problems",
-                                "explanation": "AI analysis unavailable - please review pipeline logs manually",
-                                "language": "text"
-                            }],
-                            "reasoning": "Claude API service unavailable - providing basic guidance",
-                            "llm_provider": "claude",
-                            "fallback_mode": True,
-                            "project_id": failure_data.get('project_id')
-                        }
-                    await asyncio.sleep(2 ** attempt)
+            
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=4000,
+                temperature=0.1,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            
+            logger.info("✅ Claude API call successful")
             
             # Parse response
             analysis = self.parse_llm_response(response.content[0].text)
@@ -443,43 +399,22 @@ For each critical issue, provide:
 Return analysis in the same JSON format as pipeline analysis, but adapted for quality issues."""
 
             # Call Claude
-            try:
-                response = self.client.messages.create(
-                    model=self.model,
-                    max_tokens=4000,
-                    temperature=0.1,
-                    messages=[
-                        {"role": "user", "content": prompt}
-                    ]
-                )
-                
-                # Parse response
-                analysis = self.parse_llm_response(response.content[0].text)
-                analysis["llm_provider"] = "claude"
-                analysis["project_key"] = project_key
-                
-                logger.info(f"✅ Claude SonarQube analysis complete")
-                return analysis
-                
-            except Exception as e:
-                logger.error(f"Claude API call failed for SonarQube: {e}")
-                return {
-                    "error": f"Claude API unavailable: {str(e)}",
-                    "summary": "Quality issues detected - Claude API unavailable for detailed analysis",
-                    "quality_gate_status": quality_gate.get("status", "UNKNOWN"),
-                    "fixes": [{
-                        "file_path": "unknown",
-                        "description": "Manual review required",
-                        "code_snippet": "# Please review SonarQube dashboard for specific issues",
-                        "explanation": "Claude analysis unavailable",
-                        "language": "text"
-                    }],
-                    "confidence": 30,
-                    "reasoning": "Claude API service unavailable",
-                    "llm_provider": "claude",
-                    "project_key": project_key,
-                    "fallback_mode": True
-                }
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=4000,
+                temperature=0.1,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            
+            # Parse response
+            analysis = self.parse_llm_response(response.content[0].text)
+            analysis["llm_provider"] = "claude"
+            analysis["project_key"] = project_key
+            
+            logger.info(f"✅ Claude SonarQube analysis complete")
+            return analysis
             
         except Exception as e:
             logger.error(f"Claude SonarQube analysis failed: {e}")
@@ -530,21 +465,16 @@ When discussing failures or issues, reference the specific details from the syst
 Provide clear, actionable advice with code examples when appropriate."""
 
             # Call Claude
-            try:
-                response = self.client.messages.create(
-                    model=self.model,
-                    max_tokens=2000,
-                    temperature=0.3,
-                    system=system_prompt,
-                    messages=messages
-                )
-                
-                logger.info("✅ Claude chat response generated")
-                return response.content[0].text
-                
-            except Exception as e:
-                logger.error(f"Claude chat API failed: {e}")
-                return f"I apologize, but I'm currently unable to process your request due to a service issue: {str(e)}. Please try again in a moment."
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=2000,
+                temperature=0.3,
+                system=system_prompt,
+                messages=messages
+            )
+            
+            logger.info("✅ Claude chat response generated")
+            return response.content[0].text
             
         except Exception as e:
             logger.error(f"Claude chat failed: {e}")

@@ -1,4 +1,4 @@
-# services/gitlab-api/app.py - Fixed version
+# services/gitlab-api/app.py - FIXED VERSION with proper MR creation
 from fastapi import FastAPI, HTTPException
 import gitlab
 import os
@@ -213,6 +213,144 @@ async def get_pipeline_failure_details(project_id: int, pipeline_id: int):
         return details
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/projects/{project_id}/merge-request")
+async def create_merge_request_with_fix(project_id: int, request_data: Dict[str, Any]):
+    """Create a merge request with proposed fixes - CORRECTED VERSION"""
+    if not gl:
+        raise HTTPException(status_code=500, detail="GitLab client not initialized")
+    
+    try:
+        # Extract data from request body
+        source_branch = request_data.get("source_branch")
+        title = request_data.get("title")
+        changes = request_data.get("changes", [])
+        target_branch = request_data.get("target_branch", "main")
+        description = request_data.get("description", "")
+        assign_to_author = request_data.get("assign_to_author", True)
+        
+        # Validate required fields
+        if not source_branch:
+            raise HTTPException(status_code=400, detail="source_branch is required")
+        if not title:
+            raise HTTPException(status_code=400, detail="title is required")
+        
+        print(f"🔀 Creating merge request for project {project_id}")
+        print(f"   Source branch: {source_branch}")
+        print(f"   Target branch: {target_branch}")
+        print(f"   Title: {title}")
+        print(f"   Changes: {len(changes)} files")
+        
+        project = gl.projects.get(project_id)
+        
+        # Step 1: Create branch if it doesn't exist
+        try:
+            project.branches.create({
+                'branch': source_branch,
+                'ref': target_branch
+            })
+            print(f"✅ Created branch {source_branch}")
+        except gitlab.exceptions.GitlabCreateError as e:
+            if "already exists" not in str(e):
+                print(f"❌ Error creating branch: {e}")
+                raise HTTPException(status_code=400, detail=f"Failed to create branch: {str(e)}")
+            print(f"ℹ️ Branch {source_branch} already exists")
+        
+        # Step 2: Apply changes to the branch
+        if changes:
+            try:
+                actions = []
+                for change in changes:
+                    action_type = change.get("action", "update")
+                    if action_type not in ["create", "update", "delete"]:
+                        action_type = "update"
+                    
+                    actions.append({
+                        'action': action_type,
+                        'file_path': change["file_path"],
+                        'content': change["content"]
+                    })
+                
+                # Create commit with changes
+                commit_data = {
+                    'branch': source_branch,
+                    'commit_message': f"Fix: {title}",
+                    'actions': actions
+                }
+                
+                commit = project.commits.create(commit_data)
+                print(f"✅ Created commit {commit.id}")
+                
+            except Exception as e:
+                print(f"❌ Error creating commit: {e}")
+                raise HTTPException(status_code=400, detail=f"Failed to create commit: {str(e)}")
+        
+        # Step 3: Create merge request with correct API format
+        try:
+            # GitLab API requires these specific fields
+            mr_data = {
+                'source_branch': source_branch,
+                'target_branch': target_branch,
+                'title': title,
+                'description': description,
+                'remove_source_branch': True
+            }
+            
+            # Optional: assign to author if requested
+            if assign_to_author:
+                try:
+                    # Get the author of the latest commit on source branch
+                    commits = project.commits.list(ref_name=source_branch, per_page=1)
+                    if commits:
+                        author_email = commits[0].author_email
+                        # Find user by email
+                        users = gl.users.list(search=author_email)
+                        if users:
+                            mr_data['assignee_id'] = users[0].id
+                            print(f"ℹ️ Assigned MR to {users[0].username}")
+                except Exception as e:
+                    print(f"⚠️ Could not assign to author: {e}")
+            
+            print(f"📝 Creating MR with data: {mr_data}")
+            
+            # Create the merge request using python-gitlab
+            mr = project.mergerequests.create(mr_data)
+            print(f"✅ Created merge request {mr.iid}")
+            
+            return {
+                "merge_request_id": mr.id,
+                "merge_request_iid": mr.iid,
+                "merge_request_url": mr.web_url,
+                "source_branch": source_branch,
+                "target_branch": target_branch,
+                "title": title,
+                "description": description,
+                "success": True
+            }
+            
+        except gitlab.exceptions.GitlabCreateError as e:
+            print(f"❌ GitLab API error creating MR: {e}")
+            error_message = str(e)
+            
+            # Parse common GitLab errors
+            if "422" in error_message:
+                if "already exists" in error_message.lower():
+                    raise HTTPException(status_code=409, detail="Merge request already exists for this branch")
+                elif "source branch" in error_message.lower():
+                    raise HTTPException(status_code=400, detail="Source branch is invalid or does not exist")
+                elif "target branch" in error_message.lower():
+                    raise HTTPException(status_code=400, detail="Target branch is invalid or does not exist")
+                else:
+                    raise HTTPException(status_code=422, detail=f"GitLab validation error: {error_message}")
+            else:
+                raise HTTPException(status_code=500, detail=f"GitLab API error: {error_message}")
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        print(f"❌ Unexpected error creating merge request: {e}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
