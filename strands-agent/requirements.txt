@@ -1,0 +1,18 @@
+# Core
+strands-agents[bedrock,anthropic]
+fastapi
+uvicorn[standard]
+httpx
+
+# Database
+asyncpg
+
+# Utilities
+pydantic
+pydantic-settings
+loguru
+python-dotenv
+
+# Development
+pytest
+pytest-asyncio
